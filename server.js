@@ -14,27 +14,25 @@ mongoose.connect(mySecret, { useNewUrlParser: true, useUnifiedTopology: true });
 const {Schema}=mongoose;
 
 const exerciseSchema= new Schema({
-  
+  description:{
+    type:String,
+    required:true
+  },
+  duration:{
+    type:Number,
+    required:true
+  },
+  date:{
+    type:String
+  }
 });
 
 const userSchema= new Schema({
   username:String,
-  log: [{
-    description:{
-      type:String,
-      required:true
-    },
-    duration:{
-      type:Number,
-      required:true
-    },
-    date:{
-      type:Date
-    }
-  }]
+  log: [exerciseSchema]
 });
 
-// const Exercise= mongoose.model('Exercise',exerciseSchema);
+const Exercise= mongoose.model('Exercise',exerciseSchema);
 const User= mongoose.model('User',userSchema);
 
 app.get('/', (req, res) => {
@@ -42,11 +40,13 @@ app.get('/', (req, res) => {
 });
 
 app.post("/api/users",async(req,res) =>  {
-const username= req.body.username;
+// const username= req.body.username;
 const user= new User(req.body);
+const {username,_id}=user;
+console.log(username+", "+_id)
 try  {
   await user.save();
-  res.send({user});
+  res.send({username,_id});
 }catch(e)  {
   res.send({e});
 }
@@ -66,16 +66,27 @@ app.get("/api/users",(req,res) =>  {
 app.post("/api/users/:_id/exercises",async(req,res) =>  {
   if (!req.body.date)  {  //if date is null
     console.log('null!');
-    req.body.date= new Date();  //set the date to a new date
+    const newDayString= new Date().toISOString().substring(0,10);  //set the date to a new date
+    req.body.date=newDayString;
+  }else{
+    const newDayString= new Date(req.body.date).toISOString().substring(0,10);
+    req.body.date=newDayString;
   }
-  User.findById(req.params._id,async(err,user) =>  {
-    console.log(user);
-    console.log(req.body);
+  const exercises= new Exercise(req.body);
+  console.log(exercises);
+  User.findByIdAndUpdate(req.params._id,{
+    $push:{
+      log:exercises,
+      $position:0
+    }
+  },{new:true,useFindAndModify: false},async(err,user) =>  {
     try {
-    await user.log.push(req.body);
-    console.log(user);
-    user.save();
-    res.send({user});
+      console.log(user);
+      const {username,_id}=user;
+      const {description,duration,date}=user.log[user.log.length-1];
+      const modDate= new Date(date).toDateString();
+      await user.save();
+      res.send({_id,username,date:modDate,description,duration});
     }catch(e)  {
       res.send({e});
     }
@@ -85,26 +96,55 @@ app.post("/api/users/:_id/exercises",async(req,res) =>  {
 app.get("/api/users/:_id/logs",(req,res) =>  {
   if (!req.query.from&&!req.query.to&&!req.query.limit)  {
     User.findById(req.params._id,async(err,user) =>  {
-      res.send({user,count:user.log.length});
+      const {username,_id}=user;
+      res.send({username,_id,log:user.log,count:user.log.length});
     });
   }else{
-    const from=req.query.from;
-    const to=req.query.to;
-    const limit=req.query.limit;
-    console.log("from: "+from);
-    console.log("to: "+to);
-    console.log("limit: "+limit);
     User.findById(req.params._id,async(err,user) =>  {
-      const filterArray= user.log.filter(date => date>from);
-      console.log("filtered array: "+filterArray);
-      function filterPop()  {
-        if (filterArray.length>limit)  {
-          filterArray.pop();
+      let from="";
+      let to="";
+      let finalFilter="";
+      if (req.query.from===undefined&&req.query.to===undefined)  {
+        console.log("no from or to");
+        finalFilter=user.log;
+      }else{
+        console.log("pre date from: "+req.query.from);
+        console.log("pre date to: "+req.query.to);
+        from=new Date(req.query.from);
+        from=from.getTime();
+        console.log("from: "+from);
+        to=new Date(req.query.to);
+        to=to.getTime();
+        console.log("to: "+to);
+          finalFilter= user.log.filter((date) => {
+          let exDate=new Date(date.date).getTime();
+          return exDate>=from&&exDate<=to;
+        });
+        console.log("first filtered array: "+finalFilter);
+        console.log("filtered array length: "+finalFilter.length);
+      }
+      const limit=parseInt(req.query.limit);
+      console.log("limit: "+limit);
+      console.log("req.params._id: "+req.params._id);
+      function filterPop(limit)  {
+        if (finalFilter.length>limit)  {
+          finalFilter.pop();
           return filterPop();
+        }else{
+          return finalFilter;
         }
       }
-      filterPop();
-      console.log("post limit filtered array: "+filterArray);
+      let reallyTheLastFilter="";
+      const {username,_id}=user;
+      if (isNaN(limit)===true)  {
+        reallyTheLastFilter=finalFilter;
+        console.log("NaN final filter: "+finalFilter);
+        res.send({username,_id,log:finalFilter});
+      }else{
+        reallyTheLastFilter= filterPop(limit);
+        console.log("non-NaN final filter: "+reallyTheLastFilter);
+        res.send({username,_id,log:reallyTheLastFilter});
+      }
     });
   }
 });
